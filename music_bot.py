@@ -176,7 +176,6 @@ async def play(interaction: discord.Interaction, search: str):
         logger.error(f"❌ Error playing song: {e}")
         await interaction.followup.send(f"❌ Failed to play song: {e}")
 
-
 @bot.tree.command(name='stop', description='Stops the music and clears the queue')
 async def stop(interaction: discord.Interaction):
     voice_client = interaction.guild.voice_client
