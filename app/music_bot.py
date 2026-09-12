@@ -133,8 +133,17 @@ async def join(interaction: discord.Interaction):
 
     entrance_sound = 'sounds/nokia-tune-1600-36527.mp3'
     if not voice_client.is_playing():
-        voice_client.play(discord.FFmpegPCMAudio(entrance_sound), 
-                  after=lambda e: logger.info(f"Entrance sound finished playing. Error: {e}" if e else "Entrance sound finished playing."))
+        source = discord.PCMVolumeTransformer(
+            discord.FFmpegPCMAudio(entrance_sound),
+            volume=0.15  # 🔈 15% volume (try 0.05–0.30)
+        )
+        voice_client.play(
+            source,
+            after=lambda e: logger.info(
+                f"Entrance sound finished playing. Error: {e}" if e else "Entrance sound finished playing."
+            )
+        )
+
 
 
 @bot.tree.command(name='leave', description='Leaves the voice channel')
@@ -157,20 +166,31 @@ async def play(interaction: discord.Interaction, search: str):
         return
 
     logger.info(f"🔍 Searching YouTube for: {search}")
-    video_url = await YTDLSource.search(search, loop=bot.loop)
 
-    if isinstance(video_url, str) and video_url.startswith("An error occurred"):
-        await interaction.followup.send(video_url)
+    # 🔥 ВАЖНО: search() возвращает LIST или STR
+    results = await YTDLSource.search(search, loop=bot.loop)
+
+    # Если вернулась ошибка
+    if isinstance(results, str):
+        await interaction.followup.send(results)
         return
+
+    # Берём первый валидный результат
+    title, video_url = results[0]
 
     try:
         player = await YTDLSource.from_url(video_url, loop=bot.loop)
-        if isinstance(player, str):  
-            await interaction.followup.send(player)  # Send error message if download failed
+
+        if isinstance(player, str):
+            await interaction.followup.send(player)
             return
 
-        voice_client.play(player, after=lambda e: logger.info(f'Playback finished. Error: {e}') if e else None)
-        await interaction.followup.send(f"✅ **Now playing:** {player.data['title']}")
+        voice_client.play(
+            player,
+            after=lambda e: logger.info(f'Playback finished. Error: {e}') if e else None
+        )
+
+        await interaction.followup.send(f"✅ **Now playing:** {title}")
 
     except Exception as e:
         logger.error(f"❌ Error playing song: {e}")
@@ -207,18 +227,23 @@ async def shuffle(interaction: discord.Interaction):
 
 class YTDLSource(discord.PCMVolumeTransformer):
     YDL_OPTIONS = {
-        'format': 'bestaudio/best',
-        'noplaylist': True,
-        'outtmpl': 'download/%(title)s.%(ext)s',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'progress_hooks': [log_download_progress],
-        'extractor_retries': 10,
-        'source_address': '0.0.0.0',
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'outtmpl': 'download/%(title)s.%(ext)s',
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }],
+    'progress_hooks': [log_download_progress],
+
+    # 🔥 ВАЖНО:
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android']
+        }
     }
+}
 
     FFMPEG_OPTIONS = {'options': '-vn'}
 
@@ -255,69 +280,57 @@ class YTDLSource(discord.PCMVolumeTransformer):
         except Exception as e:
             logger.error(f"❌ yt-dlp error: {e}")
             return f"❌ Failed to download song: {e}"
-
-
-
-    """ @classmethod
-    async def search(cls, search_query, *, loop=None, max_results=10):
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
-            'restrictfilenames': True,
-            'noplaylist': True,
-            'nocheckcertificate': True,
-            'ignoreerrors': False,
-            'logtostderr': False,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': f'ytsearch{max_results}',
-            'source_address': '0.0.0.0'
-        }
-
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            try:
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch{max_results}:{search_query}", download=False))
-                if 'entries' not in info or not info['entries']:
-                    print(f"No entries found for search query: {search_query}")
-                    return "No results found."
-                results = []
-                for entry in info['entries']:
-                    if 'title' in entry and 'webpage_url' in entry:
-                        results.append((entry['title'], entry['webpage_url']))
-                return results if results else "No results found."
-            except Exception as e:
-                print(f"An error occurred during the search: {e}")
-                return f"An error occurred: {e}" """
                 
     @classmethod
     async def search(cls, search_query, *, loop=None, max_results=10):
         ydl_opts = {
             'format': 'bestaudio/best',
-            'outtmpl': '%(title)s.%(ext)s',
-            'restrictfilenames': True,
             'noplaylist': True,
-            'nocheckcertificate': True,
-            'ignoreerrors': True,  # Allow errors instead of crashing
-            'logtostderr': False,
             'quiet': True,
-            'no_warnings': True,
-            'force_generic_extractor': True,  # Force fallback mode
-            'extractor_retries': 10,
-            'source_address': '0.0.0.0',
+            'ignoreerrors': True,
             'default_search': f'ytsearch{max_results}',
+            'source_address': '0.0.0.0',
         }
 
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            try:
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch{max_results}:{search_query}", download=False))
-                if 'entries' not in info or not info['entries']:
-                    print(f"No entries found for search query: {search_query}")
-                    return "No results found."
-                results = [(entry['title'], entry['webpage_url']) for entry in info['entries'] if 'title' in entry and 'webpage_url' in entry]
-                return results if results else "No results found."
-            except Exception as e:
-                print(f"An error occurred during search: {e}")
-                return f"An error occurred: {e}"
+        def _extract():
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(
+                    f"ytsearch{max_results}:{search_query}",
+                    download=False
+                )
+
+        try:
+            info = await loop.run_in_executor(None, _extract)
+
+            # 🔴 КЛЮЧЕВОЙ FIX
+            if not info or 'entries' not in info or not info['entries']:
+                return "❌ No playable results found."
+
+            results = []
+
+            for entry in info['entries']:
+                if not entry:
+                    continue
+
+                # ❌ skip age-restricted
+                if entry.get('age_limit', 0) >= 18:
+                    continue
+
+                title = entry.get('title')
+                url = entry.get('webpage_url')
+
+                if title and url:
+                    results.append((title, url))
+
+            if not results:
+                return "❌ All results are age-restricted or unavailable."
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Search error: {e}")
+            return f"❌ Search failed: {e}"
+
     
 
 @bot.tree.command(name='search', description='Searches for songs on YouTube and allows selection')
@@ -361,9 +374,9 @@ async def search(interaction: discord.Interaction, query: str):
                 title, url = search_results[song_index]
                 player = await YTDLSource.from_url(url, loop=bot.loop)
                 
-                if not player:
-                    await interaction.followup.send("Failed to load the selected song.")
-                    return
+                if isinstance(player, str):
+                    await interaction.followup.send(player)
+                return
                 
                 if not voice_channel.is_playing():
                     voice_channel.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
