@@ -1,4 +1,5 @@
-discord.py
+discord.py[voice]>=2.7.1,<3
+davey>=0.1.6,<0.2
 apscheduler
 pytz
 yt-dlp

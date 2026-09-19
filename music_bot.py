@@ -1,11 +1,24 @@
-import ssl
-import certifi
 import sys
 import os
 import logging
+
+from app.utils.console_style import setup_logging
+from app.utils.dependency_check import check_dependencies
+
+if __name__ == '__main__':
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    setup_logging()
+    if not check_dependencies():
+        raise SystemExit(1)
+
+import ssl
+import certifi
 import asyncio
 import discord
 import random
+import time
+
 from discord.ext import commands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -14,43 +27,67 @@ import yt_dlp as youtube_dl
 from dotenv import load_dotenv
 from discord import app_commands
 
-sys.stdout.reconfigure(encoding='utf-8')
-
+# Configure SSL context
 ssl._create_default_https_context = ssl._create_unverified_context
 ssl.create_default_context(cafile=certifi.where())
 
-logging.getLogger('apscheduler').setLevel(logging.DEBUG)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', handlers=[logging.StreamHandler(sys.stdout)])
-logger = logging.getLogger()
+# Configure logging
+logger = logging.getLogger(__name__)
 
+# Global variables
 song_queue = []
 current_song_index = 0
 music_dir = 'download/'
 
+# Load environment variables
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 CHANNEL_ID = os.getenv('CHANNEL_ID')
+
+CHANNEL_ID2 = os.getenv('CHANNEL_ID')
+
 USER_ID = os.getenv('USER_ID')
 USER_MAX_ID = os.getenv('USER_MAX_ID')
 
+# Define the MusicBot class
 class MusicBot(commands.Bot):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.tree = app_commands.CommandTree(self)
+    async def login(self, token):
+        self._login_started = time.perf_counter()
+        await super().login(token)
+        logger.info("Login and startup setup finished in %.2fs; connecting to Gateway...",
+                    time.perf_counter() - self._login_started)
 
     async def setup_hook(self):
-        await self.tree.sync()
+        logger.info("Discord authentication/setup requests finished in %.2fs.",
+                    time.perf_counter() - self._login_started)
+        started = time.perf_counter()
+        logger.info("Syncing application commands...")
+        synced = await self.tree.sync()
+        logger.info("Synced %d application commands in %.2fs.",
+                    len(synced), time.perf_counter() - started)
 
+# Define intents
 intents = discord.Intents.default()
 intents.messages = True
 intents.guilds = True
 intents.voice_states = True
 intents.message_content = True
 
+# Instantiate the bot
 bot = MusicBot(command_prefix='!', intents=intents)
 
+# Define the scheduler
 scheduler = AsyncIOScheduler(timezone="Europe/Tallinn")
 
+
+def log_download_progress(d):
+    """Logs download progress for debugging."""
+    if d['status'] == 'downloading':
+        print(f"Downloading: {d['_percent_str']} - Speed: {d['_speed_str']} - ETA: {d['eta']}s")
+    elif d['status'] == 'finished':
+        print(f"Download complete: {d['filename']}")
+        
+        
 @bot.event
 async def on_ready():
     logger.info(f'{bot.user.name} has connected to Discord!')
@@ -62,8 +99,7 @@ async def on_ready():
     scheduler.add_job(send_love_message, CronTrigger(hour=9, minute=45), args=[tatjana_recipient_id])
 
     scheduler.start()
-    await bot.tree.sync()
-
+    
 def get_local_songs():
     return [os.path.join(music_dir, f) for f in os.listdir(music_dir) if f.endswith(('.mp3', '.ogg', '.wav', '.webm'))]
 
@@ -73,9 +109,21 @@ async def play_local(interaction, song_path):
         await interaction.response.send_message("The bot is not in a voice channel.")
         return
 
+    # Wait for the file to finish downloading
+    timeout = 10  # Max wait time
+    while song_path.endswith(".part") and timeout > 0:
+        print(f"Waiting for {song_path} to finish downloading...")
+        time.sleep(1)
+        timeout -= 1
+
+    # Ensure the final file exists before playing
+    if not os.path.exists(song_path):
+        await interaction.response.send_message("Download failed or incomplete.")
+        return
+
     if not voice_client.is_playing():
         voice_client.play(discord.FFmpegPCMAudio(song_path), after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(interaction), bot.loop))
-        await interaction.response.send_message(f"Now playing: {os.path.basename(song_path)}")
+        await interaction.response.send_message(f"✅ Now playing: {os.path.basename(song_path)}")
     else:
         await interaction.response.send_message("Audio is already playing. Please stop the current track first.")
 
@@ -87,13 +135,17 @@ async def join(interaction: discord.Interaction):
         return
 
     channel = interaction.user.voice.channel
+    # Acknowledge before the voice handshake can exceed Discord's response deadline.
+    await interaction.response.defer(thinking=True)
     voice_client = await channel.connect()
     logger.info(f"Joined {channel.name} successfully.")
-    await interaction.response.send_message("Bot has joined the voice channel. Type `/help` to see all commands.")
+    await interaction.edit_original_response(content="Bot has joined the voice channel. Type `/help` to see all commands.")
 
     entrance_sound = 'sounds/nokia-tune-1600-36527.mp3'
     if not voice_client.is_playing():
-        voice_client.play(discord.FFmpegPCMAudio(entrance_sound), after=lambda e: logger.info('Entrance sound finished playing.', e) if e else None)
+        voice_client.play(discord.FFmpegPCMAudio(entrance_sound), 
+                  after=lambda e: logger.info(f"Entrance sound finished playing. Error: {e}" if e else "Entrance sound finished playing."))
+
 
 @bot.tree.command(name='leave', description='Leaves the voice channel')
 async def leave(interaction: discord.Interaction):
@@ -104,35 +156,35 @@ async def leave(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("The bot is not connected to a voice channel.", ephemeral=True)
 
-@bot.tree.command(name='play', description='To play or search a song from YouTube')
+@bot.tree.command(name='play', description='Plays a song from YouTube')
 @app_commands.describe(search='The song to search or play from YouTube')
 async def play(interaction: discord.Interaction, search: str):
-    server = interaction.guild
-    voice_channel = server.voice_client
-    if voice_channel.is_playing():
-        voice_channel.stop()
-
     await interaction.response.defer()
-    print("Searching for video...")
+
+    voice_client = interaction.guild.voice_client
+    if not voice_client:
+        await interaction.followup.send("❌ Bot is not in a voice channel. Use `/join` first.")
+        return
+
+    logger.info(f"🔍 Searching YouTube for: {search}")
     video_url = await YTDLSource.search(search, loop=bot.loop)
 
-    if video_url.startswith("An error occurred"):
+    if isinstance(video_url, str) and video_url.startswith("An error occurred"):
         await interaction.followup.send(video_url)
         return
 
     try:
         player = await YTDLSource.from_url(video_url, loop=bot.loop)
-        total_duration = format_duration(player.data['duration'])
-        await interaction.followup.send(f"**Now playing:** {player.data['fulltitle']} **Duration:** {total_duration}")
+        if isinstance(player, str):  
+            await interaction.followup.send(player)  # Send error message if download failed
+            return
 
-        if not voice_channel.is_playing():
-            voice_channel.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(interaction), bot.loop))
-        else:
-            await interaction.followup.send("Audio is already playing. Please stop the current track first.")
+        voice_client.play(player, after=lambda e: logger.info(f'Playback finished. Error: {e}') if e else None)
+        await interaction.followup.send(f"✅ **Now playing:** {player.data['title']}")
 
     except Exception as e:
-        await interaction.followup.send(f"An error occurred: {e}")
-        print(f"An error occurred: {e}")
+        logger.error(f"❌ Error playing song: {e}")
+        await interaction.followup.send(f"❌ Failed to play song: {e}")
 
 @bot.tree.command(name='stop', description='Stops the music and clears the queue')
 async def stop(interaction: discord.Interaction):
@@ -165,13 +217,20 @@ async def shuffle(interaction: discord.Interaction):
 
 class YTDLSource(discord.PCMVolumeTransformer):
     YDL_OPTIONS = {
-        'format': 'bestaudio',
-        'noplaylist': 'True',
-        'outtmpl': 'download/%(title)s-%(id)s.%(ext)s',
+        'format': 'bestaudio/best',
+        'noplaylist': True,
+        'outtmpl': 'download/%(title)s.%(ext)s',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'progress_hooks': [log_download_progress],
+        'extractor_retries': 10,
+        'source_address': '0.0.0.0',
     }
-    FFMPEG_OPTIONS = {
-        'options': '-vn',
-    }
+
+    FFMPEG_OPTIONS = {'options': '-vn'}
 
     def __init__(self, source, *, data, volume=0.5):
         super().__init__(source, volume=volume)
@@ -181,19 +240,35 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
-        print(f"Extracting info from URL: {url}")
+        logger.info(f"🔄 Downloading from URL: {url}")
         ydl = youtube_dl.YoutubeDL(cls.YDL_OPTIONS)
-        data = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=not stream))
-        print("Extraction complete.")
 
-        if 'entries' in data:
-            data = data['entries'][0]
+        try:
+            data = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=not stream))
+            if 'entries' in data:
+                data = data['entries'][0]  
 
-        filename = data['url'] if stream else ydl.prepare_filename(data)
-        print(f"Preparing to play: {data.get('title')}")
-        return cls(discord.FFmpegPCMAudio(filename, **cls.FFMPEG_OPTIONS), data=data)
+            filename = ydl.prepare_filename(data).replace('.webm', '.mp3').replace('.m4a', '.mp3')
 
-    @classmethod
+            # Wait if file is still being processed
+            timeout = 30
+            while filename.endswith(".part") and timeout > 0:
+                logger.warning(f"⏳ Waiting for {filename} to finish downloading...")
+                await asyncio.sleep(1)
+                timeout -= 1
+
+            if filename.endswith(".part") or not os.path.exists(filename):
+                logger.error(f"❌ Download failed, file not found: {filename}")
+                return "❌ Download failed or incomplete."
+
+            return cls(discord.FFmpegPCMAudio(filename, **cls.FFMPEG_OPTIONS), data=data)
+        except Exception as e:
+            logger.error(f"❌ yt-dlp error: {e}")
+            return f"❌ Failed to download song: {e}"
+
+
+
+    """ @classmethod
     async def search(cls, search_query, *, loop=None, max_results=10):
         ydl_opts = {
             'format': 'bestaudio/best',
@@ -222,27 +297,60 @@ class YTDLSource(discord.PCMVolumeTransformer):
                 return results if results else "No results found."
             except Exception as e:
                 print(f"An error occurred during the search: {e}")
+                return f"An error occurred: {e}" """
+                
+    @classmethod
+    async def search(cls, search_query, *, loop=None, max_results=10):
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': '%(title)s.%(ext)s',
+            'restrictfilenames': True,
+            'noplaylist': True,
+            'nocheckcertificate': True,
+            'ignoreerrors': True,  # Allow errors instead of crashing
+            'logtostderr': False,
+            'quiet': True,
+            'no_warnings': True,
+            'force_generic_extractor': True,  # Force fallback mode
+            'extractor_retries': 10,
+            'source_address': '0.0.0.0',
+            'default_search': f'ytsearch{max_results}',
+        }
+
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch{max_results}:{search_query}", download=False))
+                if 'entries' not in info or not info['entries']:
+                    print(f"No entries found for search query: {search_query}")
+                    return "No results found."
+                results = [(entry['title'], entry['webpage_url']) for entry in info['entries'] if 'title' in entry and 'webpage_url' in entry]
+                return results if results else "No results found."
+            except Exception as e:
+                print(f"An error occurred during search: {e}")
                 return f"An error occurred: {e}"
+    
 
 @bot.tree.command(name='search', description='Searches for songs on YouTube and allows selection')
 @app_commands.describe(query='The search query to find songs on YouTube')
 async def search(interaction: discord.Interaction, query: str):
     voice_channel = interaction.guild.voice_client
+    
     if not voice_channel:
-        await interaction.response.send_message("Bot is not connected to a voice channel.")
+        await interaction.response.send_message("Bot is not connected to a voice channel. Use `/join` first.", ephemeral=True)
         return
 
+    await interaction.response.defer()
     search_results = await YTDLSource.search(query, loop=bot.loop)
     if not search_results:
-        await interaction.response.send_message("No results found.")
+        await interaction.followup.send("No results found.")
         return
 
     if isinstance(search_results, str):
-        await interaction.response.send_message(search_results)
+        await interaction.followup.send(search_results)
         return
 
     results_message = "\n".join([f"{index + 1}. {title}" for index, (title, _) in enumerate(search_results[:10])])
-    message = await interaction.response.send_message(f"Search results:\n{results_message}\n\nReact to choose a song or ❌ to cancel.")
+    message = await interaction.followup.send(f"Search results:\n{results_message}\n\nReact to choose a song or ❌ to cancel.", wait=True)
 
     selection_emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟', '❌']
     for emoji in selection_emojis:
@@ -262,12 +370,28 @@ async def search(interaction: discord.Interaction, query: str):
             if 0 <= song_index < len(search_results):
                 title, url = search_results[song_index]
                 player = await YTDLSource.from_url(url, loop=bot.loop)
-                voice_channel.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-                await interaction.followup.send(f'**Now playing:** {title}')
+                
+                if not player:
+                    await interaction.followup.send("Failed to load the selected song.")
+                    return
+                
+                if not voice_channel.is_playing():
+                    voice_channel.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                    await interaction.followup.send(f'✅ **Now playing:** {title}\n🎵 Enjoy your music!')
+                else:
+                    await interaction.followup.send("Audio is already playing. Please stop the current track first.")
 
     except asyncio.TimeoutError:
         await message.clear_reactions()
         await interaction.followup.send("No response in time.")
+        
+def format_duration(duration):
+    minutes, seconds = divmod(duration, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02}:{seconds:02}"
+    else:
+        return f"{minutes}:{seconds:02}"
 
 async def play_next_song(ctx):
     global current_song_index
@@ -307,12 +431,12 @@ async def play_song(interaction, song_path):
     await interaction.response.send_message(f"Now playing: {os.path.basename(song_path)}")
 
 @bot.tree.command(name='reload', description='Reloads a module.')
-@app_commands.checks.is_owner()
+@commands.is_owner()
 @app_commands.describe(extension='The extension to reload')
 async def reload(interaction: discord.Interaction, extension: str):
     if extension:
         try:
-            bot.reload_extension(f'cogs.{extension}')
+            await bot.reload_extension(f'cogs.{extension}')
             await interaction.response.send_message(f'Reloaded `{extension}` cog.')
         except Exception as e:
             await interaction.response.send_message(f'Error reloading `{extension}`: {e}')
@@ -364,13 +488,19 @@ async def love(interaction: discord.Interaction):
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"Missing required argument: {error.param.name}")
+    elif isinstance(error, commands.CommandNotFound):
+        await ctx.send("Command not found.")
+    elif isinstance(error, commands.CommandInvokeError):
+        await ctx.send(f"Command invoke error: {error.original}")
+        logger.error(f"Command invoke error: {error.original}")
     else:
         await ctx.send("An error occurred while processing your command.")
+        logger.error(f"Unexpected error: {error}")
         raise error
 
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
 
-bot.run(TOKEN)
-
+if __name__ == '__main__':
+    bot.run(TOKEN, reconnect=True, log_handler=None)
