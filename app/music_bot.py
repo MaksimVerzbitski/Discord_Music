@@ -49,22 +49,33 @@ CHANNEL_ID2 = os.getenv('CHANNEL_ID')
 USER_ID = os.getenv('USER_ID')
 USER_MAX_ID = os.getenv('USER_MAX_ID')
 
-# Define the MusicBot class
 class MusicBot(commands.Bot):
     async def login(self, token):
         self._login_started = time.perf_counter()
         await super().login(token)
-        logger.info("Login and startup setup finished in %.2fs; connecting to Gateway...",
-                    time.perf_counter() - self._login_started)
+        logger.info(
+            "Login and startup setup finished in %.2fs; connecting to Gateway...",
+            time.perf_counter() - self._login_started
+        )
 
     async def setup_hook(self):
-        logger.info("Discord authentication/setup requests finished in %.2fs.",
-                    time.perf_counter() - self._login_started)
+        logger.info(
+            "Discord authentication/setup requests finished in %.2fs.",
+            time.perf_counter() - self._login_started
+        )
+
+        await self.load_extension("app.commands.join")
+        await self.load_extension("app.commands.leave")
+
         started = time.perf_counter()
         logger.info("Syncing application commands...")
         synced = await self.tree.sync()
-        logger.info("Synced %d application commands in %.2fs.",
-                    len(synced), time.perf_counter() - started)
+
+        logger.info(
+            "Synced %d application commands in %.2fs.",
+            len(synced),
+            time.perf_counter() - started
+        )
 
 # Define intents
 intents = discord.Intents.default()
@@ -127,34 +138,7 @@ async def play_local(interaction, song_path):
     else:
         await interaction.response.send_message("Audio is already playing. Please stop the current track first.")
 
-@bot.tree.command(name='join', description='Tells the bot to join the voice channel')
-async def join(interaction: discord.Interaction):
-    logger.info("Attempting to join a voice channel...")
-    if not interaction.user.voice:
-        await interaction.response.send_message("You are not connected to a voice channel", ephemeral=True)
-        return
 
-    channel = interaction.user.voice.channel
-    # Acknowledge before the voice handshake can exceed Discord's response deadline.
-    await interaction.response.defer(thinking=True)
-    voice_client = await channel.connect()
-    logger.info(f"Joined {channel.name} successfully.")
-    await interaction.edit_original_response(content="Bot has joined the voice channel. Type `/help` to see all commands.")
-
-    entrance_sound = 'sounds/nokia-tune-1600-36527.mp3'
-    if not voice_client.is_playing():
-        voice_client.play(discord.FFmpegPCMAudio(entrance_sound), 
-                  after=lambda e: logger.info(f"Entrance sound finished playing. Error: {e}" if e else "Entrance sound finished playing."))
-
-
-@bot.tree.command(name='leave', description='Leaves the voice channel')
-async def leave(interaction: discord.Interaction):
-    voice_client = discord.utils.get(bot.voice_clients, guild=interaction.guild)
-    if voice_client and voice_client.is_connected():
-        await voice_client.disconnect()
-        await interaction.response.send_message("The bot has left the voice channel.")
-    else:
-        await interaction.response.send_message("The bot is not connected to a voice channel.", ephemeral=True)
 
 @bot.tree.command(name='play', description='Plays a song from YouTube')
 @app_commands.describe(search='The song to search or play from YouTube')
@@ -265,39 +249,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
         except Exception as e:
             logger.error(f"❌ yt-dlp error: {e}")
             return f"❌ Failed to download song: {e}"
-
-
-
-    """ @classmethod
-    async def search(cls, search_query, *, loop=None, max_results=10):
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
-            'restrictfilenames': True,
-            'noplaylist': True,
-            'nocheckcertificate': True,
-            'ignoreerrors': False,
-            'logtostderr': False,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': f'ytsearch{max_results}',
-            'source_address': '0.0.0.0'
-        }
-
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            try:
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch{max_results}:{search_query}", download=False))
-                if 'entries' not in info or not info['entries']:
-                    print(f"No entries found for search query: {search_query}")
-                    return "No results found."
-                results = []
-                for entry in info['entries']:
-                    if 'title' in entry and 'webpage_url' in entry:
-                        results.append((entry['title'], entry['webpage_url']))
-                return results if results else "No results found."
-            except Exception as e:
-                print(f"An error occurred during the search: {e}")
-                return f"An error occurred: {e}" """
                 
     @classmethod
     async def search(cls, search_query, *, loop=None, max_results=10):

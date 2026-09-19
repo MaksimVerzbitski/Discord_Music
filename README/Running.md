@@ -25,17 +25,9 @@ Join a normal voice channel and use `/join`. The bot needs Connect and Speak
 permissions and must not be server-muted or locally muted by the listener.
 Stage channels require the bot to be allowed to speak.
 
-The command acknowledges immediately, then connects and plays the tune. Repeating
-`/join` while audio is playing reports that playback is busy. Decoder and player
-errors are reported separately from connection errors.
-
-The console reports the number of decoded audio frames at completion. This proves
-that the local player processed audio, not that Discord clients received it.
+The command acknowledges immediately, then connects and plays the tune.
+Voice commands and playback are implemented in `music_bot.py`.
 If playback completes but is silent, check the bot's per-user volume/local mute,
 compare with another listener, and retry `/leave` followed by `/join`. If both
 listeners hear nothing, investigate voice transport or encryption using a fresh
 log. Do not enable raw gateway DEBUG logging: it includes session credentials.
-
-Run local regression checks with `python -m unittest discover -s tests -v`.
-The decoder integration test requires FFmpeg and the local MP3. These checks do
-not log in to Discord or verify sound at a listener.
