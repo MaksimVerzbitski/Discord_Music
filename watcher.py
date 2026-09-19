@@ -1,3 +1,5 @@
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -17,72 +19,71 @@ class ChangeHandler(FileSystemEventHandler):
 
     def start_bot(self):
         self.process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                BOT_MODULE,
-            ]
+            [sys.executable, "-m", BOT_MODULE],
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+            if os.name == "nt"
+            else 0,
         )
 
         print(
-            f"[WATCHER] Started {BOT_MODULE} "
-            f"with PID {self.process.pid}"
+            f"[WATCHER] Started PID {self.process.pid}"
         )
 
     def stop_bot(self):
-        if (
-            self.process
-            and self.process.poll() is None
-        ):
-            print(
-                f"[WATCHER] Stopping PID "
-                f"{self.process.pid}"
+        if not self.process or self.process.poll() is not None:
+            return
+
+        print(
+            f"[WATCHER] Stopping PID {self.process.pid}"
+        )
+
+        if os.name == "nt":
+            self.process.send_signal(
+                signal.CTRL_BREAK_EVENT
+            )
+        else:
+            self.process.send_signal(
+                signal.SIGINT
             )
 
-            self.process.terminate()
+        try:
+            self.process.wait(timeout=10)
 
-            try:
-                self.process.wait(
-                    timeout=10
-                )
+        except subprocess.TimeoutExpired:
+            print(
+                "[WATCHER] Graceful shutdown timed out. "
+                "Killing process."
+            )
 
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
+            self.process.kill()
+            self.process.wait()
 
     def restart_bot(self):
         self.stop_bot()
         self.start_bot()
 
     def on_modified(self, event):
-        if event.is_directory:
-            return
-
-        if event.src_path.endswith(".py"):
+        if not event.is_directory and event.src_path.endswith(".py"):
             print(
-                "[WATCHER] Python change detected: "
-                f"{event.src_path}"
+                f"[WATCHER] Changed: {event.src_path}"
             )
 
             self.restart_bot()
 
 
 if __name__ == "__main__":
-    event_handler = ChangeHandler()
+    handler = ChangeHandler()
 
     observer = Observer()
-
     observer.schedule(
-        event_handler,
+        handler,
         WATCH_PATH,
         recursive=True,
     )
-
     observer.start()
 
     print(
-        f"[WATCHER] Watching {WATCH_PATH}/ "
-        "for Python changes..."
+        f"[WATCHER] Watching {WATCH_PATH}/"
     )
 
     try:
@@ -98,8 +99,8 @@ if __name__ == "__main__":
         observer.stop()
         observer.join()
 
-        event_handler.stop_bot()
+        handler.stop_bot()
 
         print(
-            "[WATCHER] Bot process stopped."
+            "[WATCHER] Bot stopped."
         )

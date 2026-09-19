@@ -1,3 +1,7 @@
 {
-    "folder-color.pathColors": []
+    "folder-color.pathColors": [],
+    
+    "python.terminal.useEnvFile": true
+
 }
+

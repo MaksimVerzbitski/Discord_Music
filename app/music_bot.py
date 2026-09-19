@@ -52,9 +52,12 @@ USER_MAX_ID = os.getenv('USER_MAX_ID')
 class MusicBot(commands.Bot):
     async def login(self, token):
         self._login_started = time.perf_counter()
+
         await super().login(token)
+
         logger.info(
-            "Login and startup setup finished in %.2fs; connecting to Gateway...",
+            "Login and startup setup finished in %.2fs; "
+            "connecting to Gateway...",
             time.perf_counter() - self._login_started
         )
 
@@ -80,7 +83,9 @@ class MusicBot(commands.Bot):
         await self.load_extension("app.commands.love")
 
         started = time.perf_counter()
+
         logger.info("Syncing application commands...")
+
         synced = await self.tree.sync()
 
         logger.info(
@@ -88,6 +93,36 @@ class MusicBot(commands.Bot):
             len(synced),
             time.perf_counter() - started
         )
+
+    async def close(self):
+        logger.info("Bot shutdown started.")
+
+        for voice_client in self.voice_clients:
+            try:
+                if voice_client.is_playing():
+                    voice_client.stop()
+
+                channel_name = (
+                    voice_client.channel.name
+                    if voice_client.channel
+                    else "unknown"
+                )
+
+                await voice_client.disconnect(force=True)
+
+                logger.info(
+                    "Disconnected from voice channel %s.",
+                    channel_name
+                )
+
+            except Exception:
+                logger.exception(
+                    "Failed to disconnect voice client."
+                )
+
+        await super().close()
+
+        logger.info("Bot shutdown complete.")
 
 # Define intents
 intents = discord.Intents.default()
@@ -224,10 +259,25 @@ class YTDLSource(discord.PCMVolumeTransformer):
             try:
                 info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch{max_results}:{search_query}", download=False))
                 if 'entries' not in info or not info['entries']:
-                    print(f"No entries found for search query: {search_query}")
+                    print(
+                        f"No entries found for search query: "
+                        f"{search_query}"
+                    )
                     return "No results found."
-                results = [(entry['title'], entry['webpage_url']) for entry in info['entries'] if 'title' in entry and 'webpage_url' in entry]
-                return results if results else "No results found."
+
+                results = [
+                    (entry['title'], entry['webpage_url'])
+                    for entry in info['entries']
+                    if entry
+                    and 'title' in entry
+                    and 'webpage_url' in entry
+                ]
+
+                return (
+                    results
+                    if results
+                    else "No results found."
+                )
             except Exception as e:
                 print(f"An error occurred during search: {e}")
                 return f"An error occurred: {e}"
@@ -260,6 +310,14 @@ async def play_song(interaction, song_path):
     voice_client.play(discord.FFmpegPCMAudio(song_path), after=lambda e: asyncio.run_coroutine_threadsafe(play_next_song(interaction), bot.loop))
     await interaction.response.send_message(f"Now playing: {os.path.basename(song_path)}")
 
+# Expose shared music state/helpers to command modules
+bot.song_queue = song_queue
+bot.current_song_index = current_song_index
+bot.get_local_songs = get_local_songs
+bot.play_next_song = play_next_song
+bot.play_song = play_song
+bot.YTDLSource = YTDLSource
+bot.scheduler = scheduler
 
 
 async def send_love_message(recipient_id=None):

@@ -8,8 +8,13 @@ from discord.ext import commands
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENTRANCE_SOUND = PROJECT_ROOT / "sounds" / "nokia-tune-1600-36527.mp3"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+ENTRANCE_SOUND = (
+    PROJECT_ROOT
+    / "sounds"
+    / "nokia-tune-1600-36527.mp3"
+)
 
 
 class JoinCommand(commands.Cog):

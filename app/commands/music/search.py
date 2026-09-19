@@ -120,6 +120,12 @@ class SearchCommand(commands.Cog):
                         loop=self.bot.loop
                     )
 
+                    if isinstance(player, str):
+                        await interaction.followup.send(
+                            player
+                        )
+                        return
+
                     if not player:
                         await interaction.followup.send(
                             "Failed to load the selected song."

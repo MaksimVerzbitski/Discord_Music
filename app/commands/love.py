@@ -3,10 +3,12 @@ import asyncio
 
 import discord
 
-from apscheduler.triggers.cron import CronTrigger
+from datetime import datetime
+from apscheduler.triggers.date import DateTrigger
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
+from pytz import timezone
 
 
 load_dotenv()
@@ -15,6 +17,8 @@ CHANNEL_ID = os.getenv("CHANNEL_ID")
 USER_ID = os.getenv("USER_ID")
 USER_MAX_ID = os.getenv("USER_MAX_ID")
 
+TALLINN_TZ = timezone("Europe/Tallinn")
+
 
 class LoveCommand(commands.Cog):
     def __init__(self, bot):
@@ -22,25 +26,56 @@ class LoveCommand(commands.Cog):
 
     async def send_love_message(self, recipient_id=None):
         try:
-            channel = self.bot.get_channel(
-                int(CHANNEL_ID)
+            print(
+                f"[LOVE] Sending scheduled message "
+                f"to {recipient_id}"
             )
 
-            if channel:
-                if recipient_id:
-                    await channel.send(
-                        f"<@{recipient_id}> :point_right:, "
-                        "I love you :open_hands: this much "
-                        ":pinching_hand: ❤️"
-                    )
-                else:
-                    await channel.send(
-                        "Sending love to everyone! :heart:"
-                    )
+            channel_id = int(CHANNEL_ID)
+
+            channel = self.bot.get_channel(channel_id)
+
+            if channel is None:
+                print(
+                    f"[LOVE] Channel {channel_id} not cached. "
+                    "Fetching from Discord..."
+                )
+
+                channel = await self.bot.fetch_channel(
+                    channel_id
+                )
+
+            if recipient_id:
+                await channel.send(
+                    f"<@{recipient_id}> :point_right:, "
+                    "I love you :open_hands: this much "
+                    ":pinching_hand: ❤️"
+                )
+            else:
+                await channel.send(
+                    "Sending love to everyone! :heart:"
+                )
+
+            print(
+                f"[LOVE] Message sent to "
+                f"#{channel.name} ({channel.id})."
+            )
+
+        except discord.NotFound:
+            print(
+                f"[LOVE] Channel does not exist: "
+                f"{CHANNEL_ID}"
+            )
+
+        except discord.Forbidden:
+            print(
+                f"[LOVE] Bot has no permission to access/send "
+                f"to channel: {CHANNEL_ID}"
+            )
 
         except Exception as e:
             print(
-                f"Error in send_love_message: {e}"
+                f"[LOVE] Error in send_love_message: {e}"
             )
 
     @app_commands.command(
@@ -94,9 +129,7 @@ class LoveCommand(commands.Cog):
                 timeout=30.0
             )
 
-            minutes = int(
-                minutes_msg.content
-            )
+            minutes = int(minutes_msg.content)
 
             sender_id = interaction.user.id
 
@@ -106,27 +139,50 @@ class LoveCommand(commands.Cog):
                 else USER_MAX_ID
             )
 
+            now = datetime.now(TALLINN_TZ)
+
+            run_time = now.replace(
+                hour=hour,
+                minute=minutes,
+                second=0,
+                microsecond=0
+            )
+
+            # If that time already passed today,
+            # schedule it for tomorrow.
+            if run_time <= now:
+                run_time = run_time.replace(
+                    day=now.day
+                )
+
+                from datetime import timedelta
+                run_time += timedelta(days=1)
+
             scheduler = self.bot.scheduler
 
             scheduler.add_job(
                 self.send_love_message,
-                CronTrigger(
-                    hour=hour,
-                    minute=minutes
+                DateTrigger(
+                    run_date=run_time
                 ),
                 args=[recipient_id],
                 id=(
                     f"love_message_"
                     f"{interaction.user.id}_"
                     f"{recipient_id}_"
-                    f"{hour:02d}:{minutes:02d}"
+                    f"{run_time.timestamp()}"
                 )
             )
 
             await interaction.followup.send(
                 f"Love message scheduled for "
-                f"{hour:02d}:{minutes:02d} "
+                f"{run_time:%H:%M} "
                 f"to <@{recipient_id}>."
+            )
+
+            print(
+                f"[LOVE] Job scheduled: "
+                f"{run_time.isoformat()}"
             )
 
         except asyncio.TimeoutError:
@@ -142,4 +198,6 @@ class LoveCommand(commands.Cog):
 
 
 async def setup(bot):
-    await bot.add_cog(LoveCommand(bot))
+    await bot.add_cog(
+        LoveCommand(bot)
+    )
