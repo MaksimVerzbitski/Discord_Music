@@ -64,17 +64,20 @@ class MusicBot(commands.Bot):
             time.perf_counter() - self._login_started
         )
 
-        await self.load_extension("app.commands.join")
-        await self.load_extension("app.commands.leave")
-        await self.load_extension("app.commands.play")
-        await self.load_extension("app.commands.stop")
-        await self.load_extension("app.commands.resume")
-        await self.load_extension("app.commands.reload")
+        await self.load_extension("app.commands.voice.join")
+        await self.load_extension("app.commands.voice.leave")
+
+        await self.load_extension("app.commands.music.play")
+        await self.load_extension("app.commands.music.stop")
+        await self.load_extension("app.commands.music.resume")
+        await self.load_extension("app.commands.music.shuffle")
+        await self.load_extension("app.commands.music.search")
+        await self.load_extension("app.commands.music.next")
+        await self.load_extension("app.commands.music.previous")
+
+        await self.load_extension("app.commands.utility.reload")
+
         await self.load_extension("app.commands.love")
-        await self.load_extension("app.commands.shuffle")
-        await self.load_extension("app.commands.search")
-        await self.load_extension("app.commands.next")
-        await self.load_extension("app.commands.previous")
 
         started = time.perf_counter()
         logger.info("Syncing application commands...")
